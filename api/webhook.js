@@ -2,21 +2,21 @@ const { Telegraf } = require('telegraf');
 const axios = require('axios');
 
 const API_KEY = 'a979724f3443652272529c861e925dfa';
-const BASE_URL = 'http://api.exchangerate.host';
 let bot;
 
+// Fixed: Better API endpoint with error handling
 async function getExchangeRate(from, to, amount = 1) {
     try {
-        const response = await axios.get(`${BASE_URL}/convert`, {
+        // Using free endpoint without API key first (more reliable)
+        const response = await axios.get(`https://api.exchangerate.host/convert`, {
             params: {
                 from: from.toUpperCase(),
                 to: to.toUpperCase(),
-                amount: amount,
-                access_key: API_KEY
+                amount: amount
             }
         });
         
-        if (response.data.success) {
+        if (response.data && response.data.result) {
             return {
                 rate: response.data.info.rate,
                 result: response.data.result,
@@ -24,15 +24,39 @@ async function getExchangeRate(from, to, amount = 1) {
                 to: to
             };
         } else {
-            throw new Error(response.data.error?.info || 'Conversion failed');
+            throw new Error('Invalid response from API');
         }
     } catch (error) {
         console.error('API Error:', error.message);
-        throw new Error('Failed to get exchange rate. Please try again.');
+        // Fallback to another free endpoint
+        try {
+            const fallbackResponse = await axios.get(`https://api.exchangerate.host/latest`, {
+                params: {
+                    base: from.toUpperCase(),
+                    symbols: to.toUpperCase()
+                }
+            });
+            
+            if (fallbackResponse.data && fallbackResponse.data.rates) {
+                const rate = fallbackResponse.data.rates[to.toUpperCase()];
+                if (rate) {
+                    return {
+                        rate: rate,
+                        result: amount * rate,
+                        from: from,
+                        to: to
+                    };
+                }
+            }
+            throw new Error('Conversion failed');
+        } catch (fallbackError) {
+            throw new Error('Unable to fetch exchange rate. Please try again.');
+        }
     }
 }
 
 function setupBot(botInstance) {
+    // Start command
     botInstance.start((ctx) => {
         ctx.replyWithHTML(
             `🪙 <b>Currency Exchange Bot</b>\n\n` +
@@ -45,6 +69,7 @@ function setupBot(botInstance) {
         );
     });
 
+    // Help command
     botInstance.help((ctx) => {
         ctx.replyWithHTML(
             `<b>📖 How to use:</b>\n\n` +
@@ -58,6 +83,7 @@ function setupBot(botInstance) {
         );
     });
 
+    // Convert command - FIXED with better error handling
     botInstance.command('convert', async (ctx) => {
         const args = ctx.message.text.split(' ');
         if (args.length < 3) {
@@ -77,17 +103,24 @@ function setupBot(botInstance) {
         try {
             const result = await getExchangeRate(from, to, amount);
             
-            ctx.replyWithHTML(
-                `💱 <b>Currency Conversion</b>\n\n` +
-                `${amount} ${from} = ${result.result.toFixed(2)} ${to}\n` +
-                `<i>Rate: 1 ${from} = ${result.rate.toFixed(4)} ${to}</i>\n\n` +
-                `<i>Powered By Introspection007</i>`
-            );
+            // Check if result exists before using toFixed
+            if (result && result.result !== undefined) {
+                ctx.replyWithHTML(
+                    `💱 <b>Currency Conversion</b>\n\n` +
+                    `${amount.toFixed(2)} ${from} = ${result.result.toFixed(2)} ${to}\n` +
+                    `<i>Rate: 1 ${from} = ${result.rate.toFixed(4)} ${to}</i>\n\n` +
+                    `<i>Powered By Introspection007</i>`
+                );
+            } else {
+                ctx.reply('❌ Failed to get conversion rate. Please try again later.');
+            }
         } catch (error) {
+            console.error('Conversion error:', error);
             ctx.reply(`❌ Error: ${error.message}\n\nMake sure currency codes are valid (e.g., USD, EUR, GBP)`);
         }
     });
 
+    // Rates command - FIXED
     botInstance.command('rates', async (ctx) => {
         const args = ctx.message.text.split(' ');
         if (args.length < 2) {
@@ -99,39 +132,43 @@ function setupBot(botInstance) {
         await ctx.replyWithChatAction('typing');
         
         try {
-            const response = await axios.get(`${BASE_URL}/latest`, {
+            const response = await axios.get(`https://api.exchangerate.host/latest`, {
                 params: {
-                    base: baseCurrency,
-                    access_key: API_KEY
+                    base: baseCurrency
                 }
             });
             
-            if (response.data.success) {
+            if (response.data && response.data.rates) {
                 const rates = response.data.rates;
                 const commonCurrencies = ['USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'CNY', 'INR'];
                 
                 let message = `📊 <b>Exchange Rates for ${baseCurrency}</b>\n\n`;
+                let hasRates = false;
                 
                 commonCurrencies.forEach(curr => {
                     if (rates[curr]) {
                         message += `${curr}: ${rates[curr].toFixed(4)}\n`;
+                        hasRates = true;
                     }
                 });
                 
-                message += `\n<i>Powered By Introspection007</i>`;
-                
-                ctx.replyWithHTML(message);
+                if (hasRates) {
+                    message += `\n<i>Powered By Introspection007</i>`;
+                    ctx.replyWithHTML(message);
+                } else {
+                    ctx.reply('❌ No rates found for this currency. Please check the currency code.');
+                }
             } else {
                 throw new Error('Failed to fetch rates');
             }
         } catch (error) {
+            console.error('Rates error:', error);
             ctx.reply('❌ Failed to fetch exchange rates. Please check the currency code.');
         }
     });
-
-    return botInstance;
 }
 
+// Webhook handler
 module.exports = async (req, res) => {
     const BOT_TOKEN = process.env.BOT_TOKEN;
     
