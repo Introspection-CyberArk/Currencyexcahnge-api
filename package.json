@@ -1,0 +1,14 @@
+{
+  "name": "currency-telegram-bot",
+  "version": "1.0.0",
+  "description": "Currency converter bot for Telegram",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "dev": "nodemon bot.js"
+  },
+  "dependencies": {
+    "telegraf": "^4.15.3",
+    "axios": "^1.6.2"
+  }
+}
