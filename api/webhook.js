@@ -3,77 +3,55 @@ const axios = require('axios');
 
 let bot;
 
-// Using multiple free APIs as fallbacks
+// Simple conversion using a reliable free API
 async function getExchangeRate(from, to, amount = 1) {
-    const errors = [];
-    
-    // API 1: Frankfurter (reliable, no API key needed)
     try {
-        const response = await axios.get(`https://api.frankfurter.app/latest`, {
-            params: {
-                from: from.toUpperCase(),
-                to: to.toUpperCase(),
-                amount: amount
-            },
-            timeout: 5000
-        });
+        from = from.toUpperCase().trim();
+        to = to.toUpperCase().trim();
+        amount = parseFloat(amount);
         
-        if (response.data && response.data.rates) {
-            const rate = response.data.rates[to.toUpperCase()];
+        if (isNaN(amount)) {
+            throw new Error('Invalid amount');
+        }
+        
+        // Using currency-api (very reliable, no key needed)
+        const url = `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/${from.toLowerCase()}.json`;
+        const response = await axios.get(url, { timeout: 10000 });
+        
+        if (response.data && response.data[from.toLowerCase()]) {
+            const rate = response.data[from.toLowerCase()][to.toLowerCase()];
             if (rate) {
                 return {
                     rate: rate,
                     result: amount * rate,
-                    from: from.toUpperCase(),
-                    to: to.toUpperCase(),
+                    from: from,
+                    to: to,
                     amount: amount
                 };
+            } else {
+                throw new Error(`Rate not found for ${to}`);
             }
         }
+        throw new Error('Invalid response from API');
     } catch (error) {
-        errors.push('Frankfurter API failed');
+        console.error('API Error:', error.message);
+        throw new Error(`Cannot convert ${from} to ${to}. Use valid codes like USD, EUR, INR, GBP`);
     }
-    
-    // API 2: Exchange Rate Host (fallback)
-    try {
-        const response = await axios.get(`https://api.exchangerate.host/convert`, {
-            params: {
-                from: from.toUpperCase(),
-                to: to.toUpperCase(),
-                amount: amount
-            },
-            timeout: 5000
-        });
-        
-        if (response.data && response.data.result) {
-            return {
-                rate: response.data.info.rate,
-                result: response.data.result,
-                from: from.toUpperCase(),
-                to: to.toUpperCase(),
-                amount: amount
-            };
-        }
-    } catch (error) {
-        errors.push('Exchange Rate Host failed');
-    }
-    
-    throw new Error(`Unable to convert ${from} to ${to}. Please check currency codes.`);
 }
 
+// Get rates for a currency
 async function getRates(baseCurrency) {
     try {
-        const response = await axios.get(`https://api.frankfurter.app/latest`, {
-            params: { from: baseCurrency.toUpperCase() },
-            timeout: 5000
-        });
+        baseCurrency = baseCurrency.toLowerCase().trim();
+        const url = `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/${baseCurrency}.json`;
+        const response = await axios.get(url, { timeout: 10000 });
         
-        if (response.data && response.data.rates) {
-            return response.data.rates;
+        if (response.data && response.data[baseCurrency]) {
+            return response.data[baseCurrency];
         }
         throw new Error('No rates found');
     } catch (error) {
-        throw new Error(`Unable to get rates for ${baseCurrency}`);
+        throw new Error(`Cannot get rates for ${baseCurrency.toUpperCase()}`);
     }
 }
 
@@ -85,7 +63,7 @@ function setupBot(botInstance) {
             `<b>Commands:</b>\n` +
             `<code>/convert USD EUR 100</code>\n` +
             `<code>/rates USD</code>\n\n` +
-            `<b>Quick Convert (just type):</b>\n` +
+            `<b>Quick Convert:</b>\n` +
             `<code>100 USD to EUR</code>\n\n` +
             `<i>Powered By Introspection007</i>`
         );
@@ -94,17 +72,19 @@ function setupBot(botInstance) {
     botInstance.help((ctx) => {
         ctx.replyWithHTML(
             `<b>📖 How to use:</b>\n\n` +
-            `<b>Convert:</b>\n` +
-            `<code>/convert USD EUR 100</code>\n` +
-            `<b>OR just type:</b>\n` +
-            `<code>100 USD to EUR</code>\n\n` +
-            `<b>Rates:</b>\n` +
+            `<b>Convert currency:</b>\n` +
+            `<code>/convert USD EUR 100</code>\n\n` +
+            `<b>Get exchange rates:</b>\n` +
             `<code>/rates USD</code>\n\n` +
-            `<b>Supported:</b> USD, EUR, GBP, INR, JPY, CAD, AUD, and more!\n\n` +
+            `<b>Natural language:</b>\n` +
+            `<code>100 USD to EUR</code>\n\n` +
+            `<b>Supported codes:</b>\n` +
+            `USD, EUR, GBP, INR, JPY, CAD, AUD, CHF, CNY, and 150+ more!\n\n` +
             `<i>Powered By Introspection007</i>`
         );
     });
 
+    // Convert command
     botInstance.command('convert', async (ctx) => {
         const args = ctx.message.text.split(' ');
         
@@ -120,21 +100,33 @@ function setupBot(botInstance) {
             amount = 1;
         }
         
-        await ctx.replyWithChatAction('typing');
+        const message = await ctx.reply('🔄 Converting... Please wait.');
         
         try {
             const result = await getExchangeRate(from, to, amount);
-            ctx.replyWithHTML(
-                `💱 <b>Conversion Result</b>\n\n` +
+            
+            await ctx.telegram.editMessageText(
+                ctx.chat.id,
+                message.message_id,
+                null,
+                `💱 <b>Currency Conversion</b>\n\n` +
                 `💰 <b>${result.amount.toFixed(2)} ${result.from}</b> = <b>${result.result.toFixed(2)} ${result.to}</b>\n` +
                 `📊 Rate: 1 ${result.from} = ${result.rate.toFixed(4)} ${result.to}\n\n` +
-                `<i>Powered By Introspection007</i>`
+                `<i>Powered By Introspection007</i>`,
+                { parse_mode: 'HTML' }
             );
         } catch (error) {
-            ctx.reply(`❌ ${error.message}\n\nTry: USD, EUR, GBP, INR, JPY, CAD, AUD`);
+            await ctx.telegram.editMessageText(
+                ctx.chat.id,
+                message.message_id,
+                null,
+                `❌ ${error.message}\n\nTry: USD, EUR, INR, GBP, JPY, CAD`,
+                { parse_mode: 'HTML' }
+            );
         }
     });
 
+    // Rates command
     botInstance.command('rates', async (ctx) => {
         const args = ctx.message.text.split(' ');
         
@@ -143,36 +135,48 @@ function setupBot(botInstance) {
         }
         
         const baseCurrency = args[1].toUpperCase();
-        
-        await ctx.replyWithChatAction('typing');
+        const message = await ctx.reply('🔄 Fetching rates... Please wait.');
         
         try {
             const rates = await getRates(baseCurrency);
-            const popular = ['USD', 'EUR', 'GBP', 'INR', 'JPY', 'CAD', 'AUD', 'CHF', 'CNY'];
+            const popular = ['usd', 'eur', 'gbp', 'inr', 'jpy', 'cad', 'aud', 'chf', 'cny'];
             
-            let message = `📊 <b>Exchange Rates (1 ${baseCurrency})</b>\n\n`;
-            let count = 0;
+            let responseText = `📊 <b>Exchange Rates (1 ${baseCurrency})</b>\n\n`;
+            let hasRates = false;
             
             for (const curr of popular) {
-                if (rates[curr] && curr !== baseCurrency) {
-                    message += `💵 ${curr}: ${rates[curr].toFixed(4)}\n`;
-                    count++;
+                const upperCurr = curr.toUpperCase();
+                if (rates[curr] && upperCurr !== baseCurrency) {
+                    responseText += `💵 ${upperCurr}: ${rates[curr].toFixed(4)}\n`;
+                    hasRates = true;
                 }
             }
             
-            if (count === 0) {
-                message = `❌ No rates found for ${baseCurrency}. Please check the currency code.`;
+            if (!hasRates) {
+                responseText = `❌ Could not find rates for ${baseCurrency}. Please check the currency code.`;
             } else {
-                message += `\n<i>Powered By Introspection007</i>`;
+                responseText += `\n<i>Powered By Introspection007</i>`;
             }
             
-            ctx.replyWithHTML(message);
+            await ctx.telegram.editMessageText(
+                ctx.chat.id,
+                message.message_id,
+                null,
+                responseText,
+                { parse_mode: 'HTML' }
+            );
         } catch (error) {
-            ctx.reply(`❌ Unable to get rates for ${baseCurrency}. Try USD, EUR, or INR.`);
+            await ctx.telegram.editMessageText(
+                ctx.chat.id,
+                message.message_id,
+                null,
+                `❌ Cannot get rates for ${baseCurrency}. Try USD, EUR, or INR.`,
+                { parse_mode: 'HTML' }
+            );
         }
     });
 
-    // Handle natural language: "100 USD to EUR"
+    // Natural language: "100 USD to EUR"
     botInstance.on('text', async (ctx) => {
         const text = ctx.message.text;
         
@@ -186,18 +190,29 @@ function setupBot(botInstance) {
             const from = match[2].toUpperCase();
             const to = match[3].toUpperCase();
             
-            await ctx.replyWithChatAction('typing');
+            const message = await ctx.reply('🔄 Converting...');
             
             try {
                 const result = await getExchangeRate(from, to, amount);
-                ctx.replyWithHTML(
+                
+                await ctx.telegram.editMessageText(
+                    ctx.chat.id,
+                    message.message_id,
+                    null,
                     `💱 <b>Conversion Result</b>\n\n` +
                     `💰 <b>${result.amount.toFixed(2)} ${result.from}</b> = <b>${result.result.toFixed(2)} ${result.to}</b>\n` +
                     `📊 Rate: 1 ${result.from} = ${result.rate.toFixed(4)} ${result.to}\n\n` +
-                    `<i>Powered By Introspection007</i>`
+                    `<i>Powered By Introspection007</i>`,
+                    { parse_mode: 'HTML' }
                 );
             } catch (error) {
-                ctx.reply(`❌ ${error.message}`);
+                await ctx.telegram.editMessageText(
+                    ctx.chat.id,
+                    message.message_id,
+                    null,
+                    `❌ ${error.message}`,
+                    { parse_mode: 'HTML' }
+                );
             }
         }
     });
